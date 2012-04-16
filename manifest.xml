@@ -1,0 +1,294 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<extension engine="1.0">
+    <id>reputation</id>
+    <title>PunBB Reputation System</title>
+    <version>1.5</version>
+    <description>Allow users to give reputations to users. Some helps taken from the eKarma script by Caleb Champlin
+        [Mediator] (cmediator@gmail.com).
+    </description>
+    <author>The HungryCoder</author>
+    <minversion>1.3 Beta</minversion>
+    <maxtestedon>1.3.4</maxtestedon>
+    <dependencies>
+        <dependency>jquery</dependency>
+    </dependencies>
+    <install><![CDATA[
+	// Install code here
+	if (!array_key_exists('o_reputation_enable', $forum_config)){
+		$forum_db->add_field('users','reputation','INT(10)',false,0);
+		$sql = 'CREATE TABLE '.$forum_db->prefix."reputation (
+			`id` INTEGER UNSIGNED NOT NULL AUTO_INCREMENT,
+			`post_id` INT(10) NOT NULL DEFAULT 0,
+			`user_id` INT(10) NOT NULL DEFAULT 0,
+			`changer_id` INT(10) NOT NULL DEFAULT 0,
+			`reason` varchar(255) NOT NULL,
+			`time` INT(10) NOT NULL DEFAULT 0,
+			`action` TINYINT(1) NOT NULL DEFAULT 0,
+			`trash` CHAR(1) NOT NULL DEFAULT 0,
+			PRIMARY KEY(`id`)
+		) ENGINE = MyISAM CHARACTER SET utf8";
+		$forum_db->query($sql) or error(__FILE__, __LINE__);
+		$forum_db->query("ALTER TABLE `".$forum_db->prefix."reputation` ADD INDEX ( `user_id` )");
+		$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_enable\',\'0\')');
+		$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_guests\',\'0\')');
+		$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_admods_only\',\'0\')');
+		$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_word\',\'Reputation\')');
+		$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_word_plus\',\'Reputation +\')');
+		$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_word_minus\',\'Reputation -\')');
+		$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_post_word\',\'Usefulness\')');
+		$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_time_limit\',\'24\')');
+		//$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_min_post\',\'50\')');
+		$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_exclude_user\',\'\')');
+		$forum_db->query('INSERT INTO '.$forum_db->prefix.'config (conf_name,conf_value) VALUES (\'o_reputation_on_closed_topic\',\'\')');
+		$forum_db->query('ALTER TABLE `punbb_reputation` CHANGE `deleted` `trashed` CHAR( 1 ) CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL DEFAULT '0',
+CHANGE `delete_reason` `trashed_reason` MEDIUMTEXT CHARACTER SET utf8 COLLATE utf8_general_ci NOT NULL ');
+)");
+	}
+	// Regenerate the config cache
+	require_once FORUM_ROOT.'include/cache.php';
+	generate_config_cache();
+  ]]></install>
+
+    <uninstall><![CDATA[
+	// Uninstall code here
+	//$forum_db->drop_field('users','reputation');
+	//$forum_db->query('DROP TABLE '.$forum_db->prefix.'reputation');
+	//$forum_db->query('DELETE FROM '.$forum_db->prefix.'config WHERE conf_name=\'o_reputation_enable\' OR conf_name=\'o_reputation_guests\' OR conf_name=\'o_reputation_admods_only\' OR conf_name=\'o_reputation_word\' OR conf_name=\'o_reputation_word_plus\' OR conf_name=\'o_reputation_word_minus\' OR conf_name=\'o_reputation_post_word\' OR conf_name=\'o_reputation_time_limit\' OR conf_name=\'o_reputation_exclude_user\'');
+	// Regenerate the config cache
+	require_once FORUM_ROOT.'include/cache.php';
+	generate_config_cache();
+  ]]></uninstall>
+
+    <hooks>
+        <hook id="pf_change_details_about_pre_header_load" priority="2"><![CDATA[
+if (!$forum_user['is_guest']){
+	if (file_exists($ext_info['path'].'/lang/'.$forum_user['language'].'.php'))
+		require $ext_info['path'].'/lang/'.$forum_user['language'].'.php';
+	else
+		require $ext_info['path'].'/lang/English.php';
+
+        $forum_page['user_info']['reputation'] = '<li><span>'.$lang_reputation['Reputation'].':'. '<strong> '.forum_number_format($user['reputation']).'</strong></span></li>';
+		$forum_page['user_activity']['see_reputation'] = '<li'.(empty($forum_page['user_activity']) ? ' class="first-item"' : '').'><a href="'.$ext_info['url'].'/reputation.php?action=show&uid='.$id.'">'.sprintf($lang_reputation['View reputation'],$user['username']).'</a></li>';
+}
+		]]></hook>
+
+        <hook id="hd_head" priority="6"><![CDATA[
+			$forum_head['reputation_js'] = '<script src="'.$ext_info['url'].'/box.js" type="text/javascript"></script>';
+		]]></hook>
+        <hook id="vt_qr_get_posts"><![CDATA[
+		$query['SELECT'] .= ',u.reputation,k.id as reputation_id';
+		$query['JOINS'][] = array(
+				'LEFT JOIN'		=> 'reputation AS k',
+				'ON'			=> '(k.user_id=u.id AND k.changer_id='.intval($forum_user['id']).' AND k.time-'.time().'<'.($forum_config['o_reputation_time_limit'] * 3600).')'
+			);
+		$query['GROUP BY'] = 'p.id';
+	]]></hook>
+        <hook id="pf_qr_get_user_info"><![CDATA[
+		$query['SELECT'] .= ',k.id as reputation_id';
+		$query['JOINS'][] = array(
+				'LEFT JOIN'		=> 'reputation AS k',
+				'ON'			=> '(k.user_id=u.id AND k.changer_id='.intval($forum_user['id']).' AND k.time-'.time().'<'.($forum_config['o_reputation_time_limit'] * 3600).')'
+			);
+		$query['GROUP BY'] = 'u.id';
+    ]]></hook>
+        <hook id="vt_row_pre_post_actions_merge"><![CDATA[
+    ?> <?php
+		if ($cur_post['poster_id'] > 1 && $forum_config['o_reputation_enable'] == '1' && $forum_user['num_posts'] >= 50 && ($forum_config['o_reputation_admods_only'] == '0' || ($forum_user['g_moderator'] == '1' || $forum_user['g_id'] == FORUM_ADMIN))){
+
+			//banned from reputation check
+			$repu_banned_user = @$forum_config['o_reputation_exclude_user'];
+			if(!empty($repu_banned_user)) $repu_banned_user = explode(',',$repu_banned_user);
+			if(count($repu_banned_user)>0){
+				if(in_array($forum_user['id'],@$repu_banned_user)){
+					$is_user_banned_from_repu = true;
+				} else {
+					$is_user_banned_from_repu = false;
+				}
+			} else {
+				$is_user_banned_from_repu = false;
+			}
+
+
+			if($cur_post['poster_id']==$forum_user['id'] OR $forum_user['is_guest'] OR $is_user_banned_from_repu){
+				$forum_page['author_info']['reputation'] = '<li class="userreputation"><span><strong><a href="'.$ext_info['url'].'/reputation.php?action=show&uid='.$cur_post['poster_id'].'">' . forum_htmlencode($forum_config['o_reputation_word']) . '</a></strong>:&nbsp; '. forum_number_format($cur_post['reputation']) .' &nbsp;</span></li>';
+			} else {
+				$forum_page['author_info']['reputation'] = '<li class="userreputation"><span><strong><a href="'.$ext_info['url'].'/reputation.php?action=show&uid='.$cur_post['poster_id'].'">' . forum_htmlencode($forum_config['o_reputation_word']) . '</a></strong>: &nbsp; <img  width="auto" height="auto" style="cursor:pointer" onclick="return reputation(this,\''.$cur_post['username'].'\',\'plus\','.$cur_post['poster_id'].','.$cur_post['id'].')" src="'.$ext_info['url'].'/plus.gif'.'" alt="'.forum_htmlencode($forum_config['o_reputation_word_plus']) . '" /></a> &nbsp;'. forum_number_format($cur_post['reputation']) .'&nbsp; <img width="auto" height="auto" src="'.$ext_info['url'].'/minus.gif'.'" style="cursor:pointer" onclick="return reputation(this,\''.$cur_post['username'].'\',\'minus\','.$cur_post['poster_id'].','.$cur_post['id'].')" alt="' . forum_htmlencode($forum_config['o_reputation_word_minus']) . '" /></a>'. (($forum_user['is_admmod']) ? '<a href="'.$ext_info['url'].'/reputation.php?action=log&uid='.$cur_post['poster_id'].'"><img src="'.$ext_info['url'].'/log.gif" alt="Log" title="Reputation Log" /></a>' : '').'&nbsp;</span></li>';
+			}
+		}
+    ]]></hook>
+
+        <hook id="aop_start"><![CDATA[
+		if (file_exists($ext_info['path'].'/lang/'.$forum_user['language'].'.php'))
+			require $ext_info['path'].'/lang/'.$forum_user['language'].'.php';
+		else
+			require $ext_info['path'].'/lang/English.php';
+    ]]></hook>
+        <hook id="aop_features_validation"><![CDATA[
+		if (!isset($form['reputation_enable']) || $form['reputation_enable'] != '1') $form['reputation_enable'] = '0';
+		if (!isset($form['reputation_on_closed_topic']) || $form['reputation_on_closed_topic'] != '1') $form['reputation_on_closed_topic'] = '0';
+		if (!isset($form['reputation_admods_only']) || $form['reputation_admods_only'] != '1') $form['reputation_admods_only'] = '0';
+		$form['reputation_time_limit'] = intval($form['reputation_time_limit']);
+		$form['reputation_word'] = trim($form['reputation_word']);
+		$form['reputation_word_plus'] = trim($form['reputation_word_plus']);
+		$form['reputation_word_minus'] = trim($form['reputation_word_minus']);
+		$form['reputation_exclude_user'] = trim($form['reputation_exclude_user']);
+    ]]></hook>
+        <hook id="aop_features_posting_fieldset_end"><![CDATA[
+			?><div class="content-head">
+				<h2 class="hn"><span><?php echo $lang_reputation['Reputation part head']; ?></span></h2>
+			</div>
+			<fieldset class="frm-group group<?php echo ++$forum_page['group_count'] ?>">
+				<legend class="group-legend"><span><?php echo $lang_admin_settings['Features posting legend'] ?></span></legend>
+				<div class="sf-set set<?php echo ++$forum_page['item_count'] ?>">
+					<div class="sf-box checkbox">
+						<span class="fld-input"><input type="checkbox" id="fld<?php echo ++$forum_page['fld_count'] ?>" name="form[reputation_enable]" value="1"<?php if ($forum_config['o_reputation_enable'] == '1') echo ' checked="checked"' ?> /></span>
+						<label for="fld<?php echo $forum_page['fld_count'] ?>"><span class="fld-label"><?php echo $lang_reputation['Reputation enable'] ?></span> <?php echo $lang_reputation['Reputation enable info'] ?></label>
+					</div>
+					<div class="sf-box checkbox">
+						<span class="fld-input"><input type="checkbox" id="fld<?php echo ++$forum_page['fld_count'] ?>" name="form[reputation_admods_only]" value="1"<?php if ($forum_config['o_reputation_admods_only'] == '1') echo ' checked="checked"' ?> /></span>
+						<label for="fld<?php echo $forum_page['fld_count'] ?>"><span class="fld-label"><?php echo $lang_reputation['Reputation admods only'] ?></span>  <?php echo $lang_reputation['Reputation admods only info'] ?></label>
+					</div>
+					<div class="sf-box text">
+						<label for="fld<?php echo ++$forum_page['fld_count'] ?>"><span class="fld-label"><?php echo $lang_reputation['Word'] ?></span> <small><?php echo $lang_reputation['Word info'] ?></small></label><br />
+						<span class="fld-input"><input type="text" id="fld<?php echo $forum_page['fld_count'] ?>" name="form[reputation_word]" size="15" class="eng" maxlength="30" value="<?php echo forum_htmlencode($forum_config['o_reputation_word']) ?>" /></span>
+					</div>
+					<div class="sf-box text">
+						<label for="fld<?php echo ++$forum_page['fld_count'] ?>"><span class="fld-label"><?php echo $lang_reputation['Word Plus'] ?></span> <small><?php echo $lang_reputation['Word info plus'] ?></small></label><br />
+						<span class="fld-input"><input type="text" id="fld<?php echo $forum_page['fld_count'] ?>" name="form[reputation_word_plus]" size="15" class="eng" maxlength="30" value="<?php echo forum_htmlencode($forum_config['o_reputation_word_plus']) ?>" /></span>
+					</div>
+					<div class="sf-box text">
+						<label for="fld<?php echo ++$forum_page['fld_count'] ?>"><span class="fld-label"><?php echo $lang_reputation['Word Minus'] ?></span> <small><?php echo $lang_reputation['Word info minus'] ?></small></label><br />
+						<span class="fld-input"><input type="text" id="fld<?php echo $forum_page['fld_count'] ?>" name="form[reputation_word_minus]" size="15" class="eng"  maxlength="30" value="<?php echo forum_htmlencode($forum_config['o_reputation_word_minus']) ?>" /></span>
+					</div>
+					<div class="sf-box text">
+						<label for="fld<?php echo ++$forum_page['fld_count'] ?>"><span class="fld-label"><?php echo $lang_reputation['Time limit'] ?></span> <small><?php echo $lang_reputation['Time limit info'] ?></small></label><br />
+						<span class="fld-input"><input type="text" id="fld<?php echo $forum_page['fld_count'] ?>" name="form[reputation_time_limit]" size="6" class="eng"  maxlength="12" value="<?php echo $forum_config['o_reputation_time_limit'] ?>" /></span>
+					</div>
+
+					<div class="sf-box text">
+						<label for="fld<?php echo ++$forum_page['fld_count'] ?>"><span class="fld-label"><?php echo $lang_reputation['Exclude user'] ?></span> <small><?php echo $lang_reputation['Exclude user desc'] ?></small></label><br />
+						<span class="fld-input"><input type="text" id="fld<?php echo $forum_page['fld_count'] ?>" name="form[reputation_exclude_user]" size="12" class="eng"  value="<?php echo (isset($forum_config['o_reputation_exclude_user'])) ? @$forum_config['o_reputation_exclude_user'] : ''; ?>" /></span>
+					</div>
+					<div class="sf-box checkbox">
+						<span class="fld-input"><input type="checkbox" id="fld<?php echo ++$forum_page['fld_count'] ?>" name="form[reputation_on_closed_topic]" value="1"<?php if ($forum_config['o_reputation_on_closed_topic'] == '1') echo ' checked="checked"' ?> /></span>
+						<label for="fld<?php echo $forum_page['fld_count'] ?>"><span class="fld-label"><?php echo $lang_reputation['On closed topic'] ?></span> <?php echo $lang_reputation['On closed topic info'] ?></label>
+					</div>
+				</div>
+			</fieldset>
+		<?php
+	]]></hook>
+        <hook id="ca_fn_generate_admin_menu_new_link"><![CDATA[
+		global $base_url;
+			$forum_page['admin_menu']['repu_log'] = '<li class="'.((@$_REQUEST['action'] == 'repu_log') ? 'active' : 'normal').((empty($forum_page['admin_menu'])) ? ' first-item' : '').'"><a href="'.$base_url.'/admin/index.php?action=repu_log"><span>Reputation Log</span></a></li>';
+
+		]]></hook>
+
+        <hook id="ain_end"><![CDATA[
+        ?><?php 
+        error_reporting(E_ALL);
+        ini_set('display_errors',1);
+			if (isset($_GET['action']) && $_GET['action'] == 'repu_log' && $forum_user['is_admmod'])
+			{
+
+				ob_clean();
+
+//load language file
+if (file_exists($ext_info['path'].'/lang/'.$forum_user['language'].'.php'))
+	require $ext_info['path'].'/lang/'.$forum_user['language'].'.php';
+else
+	require $ext_info['path'].'/lang/English.php';
+
+if(!defined('FORUM_PAGE'))
+	@define('FORUM_PAGE', 'reputation');
+
+	$uid = isset($_GET['uid']) ? intval($_GET['uid']) : 0;
+
+	if(!$forum_user['is_admmod'])
+		message($lang_common['Bad request']);
+
+
+	?>
+        <script type="text/javascript">
+            var baseurl = '<?php echo $ext_info['url'];?>/reputation.php?action=delete&rid=';
+            function delreason(rep_id){
+                var reason = prompt('Enter the reason of deleting this reputation');
+                if(!reason) return false;
+
+                window.location = baseurl + rep_id+ '&reason='+encodeURIComponent(reason);
+
+            }
+        </script>
+	<style>
+	.from{
+	    width: 60px;
+	}
+	.to{
+	    width: 60px;
+	}
+	#reputation td{
+	    overflow:hidden;
+	}
+	.reason, .subject{
+	    width:30%;
+	}
+    .deleted{
+        background-color: grey;
+    }
+    .date{
+        width:8%;
+    }
+	</style>
+	<div id="reputation" class="main-content main-frm">
+		<table>
+			<thead><tr><td class="date"><strong>Date</strong></td> <td class="from"><b>From</b></td><td class="to"><b>To</b></td><td class="subject"><b>Post (Topic)</b></td><td class="reason"><b>Reason</b></td><td width="40px"><b>Type</b></td><td><b>Date</b></td>
+			<?php if($forum_user['is_admmod']) echo '<td width="50px">Action</td>'; ?>
+			</tr></thead>
+			<?php
+			$last24hours  = strtotime("-1 day");
+			$query = "SELECT k.id, k.time, k.reason, k.post_id, k.changer_id, k.action, k.user_id, k.`trashed`, k.`trashed_reason`, k.`mod_name`, t.subject, u.username AS `to_username`, u2.username AS `from_username` FROM {$forum_db->prefix}reputation AS k LEFT JOIN {$forum_db->prefix}users AS u ON u.id=k.user_id left join {$forum_db->prefix}posts as p on p.id=k.post_id LEFT JOIN {$forum_db->prefix}topics AS t ON t.id=p.topic_id LEFT JOIN {$forum_db->prefix}users as u2 ON u2.id = k.changer_id WHERE k.`time` >= $last24hours ORDER BY k.id DESC limit 1000";
+
+			$result = $forum_db->query($query) or error($forum_db->error(),__FILE__,__LINE__);
+			while (false != ($row = $forum_db->fetch_assoc($result)))
+			{
+			//var_dump($row);
+				?>
+				<tbody><tr <?php if($row['trashed']) echo 'class="deleted"';?>>
+				<?php
+				echo '<td>'.forum_number_format(date('d-m-Y h:i A',$row['time'])).'</td>';
+				echo '<td><a title="View reputations of '.$row['from_username'].'" href="'.$ext_info['url'].'/reputation.php?action=show&uid='.$row['changer_id'].'">'.$row['from_username'].'</a>';
+				    //log button
+				    echo '<a href="'.$ext_info['url'].'/reputation.php?action=log&uid='.$row['changer_id'].'"><img src="'.$ext_info['url'].'/log.gif" alt="Log" title="Reputation Log of '.$row['from_username'].'" /></a>';
+				echo '</td>';
+				echo '<td><a title="View reputations of '.$row['to_username'].'" href="'.$ext_info['url'].'/reputation.php?action=show&uid='.$row['user_id'].'">'.$row['to_username'].'</a>';
+    				//log button
+				    echo '<a href="'.$ext_info['url'].'/reputation.php?action=log&uid='.$row['user_id'].'"><img src="'.$ext_info['url'].'/log.gif" alt="Log" title="Reputation Log of '.$row['to_username'].'" /></a>';
+				echo '</td>';
+
+				if(is_null($row['subject'])){
+					echo '<td>Deleted</td>';
+				} else {
+					echo '<td class="subject"><a href="'.$base_url.'/viewtopic.php?pid='.$row['post_id'].'#p'.$row['post_id'].'">'.$row['subject'].'</a></td>';
+				}
+				echo '<td>'.($row['reason']).'</td>';
+				$type = ($row['action']=='1') ? $ext_info['url'].'/plus.gif' : $ext_info['url'].'/minus.gif';
+				echo '<td><img src="'.$type.'" /></td>';
+				echo '<td>'.(date('d-m-Y h:i A',$row['time'])).'</td>';
+                if($row['trashed']){
+                       echo '<td title="Delete Reason: '.@$row['delete_reason'].' by '.@$row['mod_name'].'"><a  href="'.$ext_info['url'].'/reputation.php?action=undelete&rid='.$row['id'].'" alt="Undelete" title="Undelete this reputation"><img src="'.$ext_info['url'].'/undel.png" /></a></td>';
+                } else {
+                    echo '<td><a style="cursor:pointer" title="Delete this reputation" onclick="delreason(\''.$row['id'].'\');" alt="Delete"><img src="'.$ext_info['url'].'/del.gif" /></a></td>';
+                }
+			}
+			echo '</table></div>';
+}
+
+
+		]]></hook>
+
+        <hook id="ft_about_output_start">
+            <![CDATA[
+			include($ext_info['path'].'/div.php');
+	    ]]></hook>
+    </hooks>
+</extension>
